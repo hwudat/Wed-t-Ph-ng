@@ -578,22 +578,20 @@ async function renderRooms(roomsToRender = null) {
             let buttonHTML = '';
             let cardExtraStyle = '';
 
-            if (room.isMyRoom) {
-                badgeHTML = `<span class="status-badge status-mine">Phòng của bạn</span>`;
-                buttonHTML = `<button class="book-btn btn-mine" onclick="showToast('Bạn đang sử dụng phòng này. Xem chi tiết ở mục Cá nhân!','info')">Đang sử dụng</button>`;
-                cardExtraStyle = 'border-color: rgba(14,165,233,0.4); box-shadow: 0 8px 28px rgba(14,165,233,0.12);';
-            } else if (room.isAvailable) {
+           if (room.isMyRoom) {
+            badgeHTML = `<span class="status-badge status-mine">Phòng của bạn</span>`;
+            buttonHTML = `<button class="book-btn btn-mine" onclick="showToast('Bạn đang sử dụng phòng này. Xem chi tiết ở mục Cá nhân!','info')">Đang sử dụng</button>`;
+            cardExtraStyle = 'border-color: rgba(14,165,233,0.4); box-shadow: 0 8px 28px rgba(14,165,233,0.12);';
+        } else {
+            // CHỈNH SỬA Ở ĐÂY: Dù phòng bận hay trống, luôn hiện nút cho phép chọn ngày đặt
+            if (room.isAvailable) {
                 badgeHTML = `<span class="status-badge status-ready">Còn trống</span>`;
-                buttonHTML = `<button class="book-btn" onclick="attemptToBook('${room.id}', '${room.name}', ${room.price})">Đặt Phòng Ngay</button>`;
             } else {
-                badgeHTML = `<span class="status-badge status-occupied">Đã đặt</span>`;
-                cardExtraStyle = 'opacity: 0.82;';
-                if (room.availableFrom) {
-                    buttonHTML = `<div class="room-available-from">Trống từ ngày <strong>${room.availableFrom}</strong></div>`;
-                } else {
-                    buttonHTML = `<button class="book-btn" disabled>Đã có khách</button>`;
-                }
+                badgeHTML = `<span class="status-badge status-occupied">Đang có khách</span>`;
+                cardExtraStyle = 'opacity: 0.9;';
             }
+            buttonHTML = `<button class="book-btn" onclick="attemptToBook('${room.id}', '${room.name}', ${room.price})">Chọn ngày đặt</button>`;
+        }
 
             const typeLabel = room.name.includes('Suite') ? 'Suite · Hạng sang' 
                             : room.name.includes('Deluxe') ? 'Deluxe · Cao cấp'
@@ -676,30 +674,60 @@ let bookingNights = 1; // Mặc định ở 1 đêm
 
 // [Thay thế nội dung bên trong hàm attemptToBook]
 async function attemptToBook(roomId, roomName, price) {
-    if (localStorage.getItem('is_logged_in') !== 'true') { showToast("Vui lòng đăng nhập trước khi đặt phòng!", "error"); return openLoginModal(); }
+    if (localStorage.getItem('is_logged_in') !== 'true') { 
+        showToast("Vui lòng đăng nhập trước khi đặt phòng!", "error"); 
+        return openLoginModal(); 
+    }
     
     currentBookingRoom = { id: roomId, name: roomName, price: price };
     
-    let checkinStr = document.getElementById('search-checkin').value;
-    let checkoutStr = document.getElementById('search-checkout').value;
-    
-    let ciDate = checkinStr ? new Date(checkinStr + 'T14:00') : new Date();
-    if (!checkinStr) ciDate.setHours(14, 0, 0, 0);
-    
-    let coDate = checkoutStr ? new Date(checkoutStr + 'T12:00') : new Date(new Date().getTime() + 24*60*60*1000);
-    if (!checkoutStr) coDate.setHours(12, 0, 0, 0);
+    // Ép kiểu input sang text để Flatpickr hoạt động tốt (không cần sửa file HTML)
+    const ciInput = document.getElementById('booking-checkin-input');
+    const coInput = document.getElementById('booking-checkout-input');
+    if (ciInput) ciInput.type = 'text';
+    if (coInput) coInput.type = 'text';
     
     document.getElementById('booking-room-name').innerText = roomName;
     document.getElementById('booking-guest-name').innerText = localStorage.getItem('current_user') || "Khách hàng";
     
-    // Gán dữ liệu vào ô chọn Giờ
-    const formatForInput = (d) => { return d.getFullYear() + '-' + (d.getMonth() + 1).toString().padStart(2, '0') + '-' + d.getDate().toString().padStart(2, '0') + 'T' + d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0'); };
-    document.getElementById('booking-checkin-input').value = formatForInput(ciDate);
-    document.getElementById('booking-checkout-input').value = formatForInput(coDate);
+    // Làm sạch ngày cũ
+    ciInput.value = '';
+    coInput.value = '';
+    document.getElementById('booking-nights-badge').innerText = '0 đêm';
+    document.getElementById('invoice-nights').innerText = '0 đêm';
+    updateBookingTotal();
     
-    recalculateBooking(); // Gọi hàm tính toán
+    // 1. GỌI API LẤY LỊCH BẬN
+    let disabledDates = [];
+    try {
+        const res = await fetch(`http://127.0.0.1:8000/api/rooms/${roomId}/booked-dates`);
+        if (res.ok) disabledDates = await res.json(); 
+    } catch(e) { console.log("Không tải được lịch kẹt của phòng này."); }
+
+    // 2. KHỞI TẠO LỊCH FLATPICKR THÔNG MINH
+    const checkoutPicker = flatpickr("#booking-checkout-input", {
+        minDate: "today",
+        disable: disabledDates,   // Làm xám các ngày đã có người đặt
+        dateFormat: "Y-m-d",      // Lưu định dạng chuẩn gửi xuống SQL
+        onChange: function() { recalculateBooking(); }
+    });
+
+    flatpickr("#booking-checkin-input", {
+        minDate: "today",
+        disable: disabledDates,   // Làm xám các ngày đã có người đặt
+        dateFormat: "Y-m-d",
+        onChange: function(selectedDates, dateStr) {
+            if (selectedDates[0]) {
+                // Tự động đẩy ngày trả tối thiểu lên sau ngày nhận 1 ngày
+                let nextDay = new Date(selectedDates[0]);
+                nextDay.setDate(nextDay.getDate() + 1);
+                checkoutPicker.set('minDate', nextDay);
+            }
+            recalculateBooking();
+        }
+    });
     
-    // NẠP DANH SÁCH DỊCH VỤ TỪ API
+    // 3. NẠP DANH SÁCH DỊCH VỤ TỪ API
     const sList = document.getElementById('booking-services-list'); 
     sList.innerHTML = '<p style="font-size:13px; color:#666;">Đang tải danh sách dịch vụ...</p>';
     try {

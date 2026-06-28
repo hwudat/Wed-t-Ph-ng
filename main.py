@@ -194,6 +194,39 @@ def search_available_rooms(
         })
     conn.close()
     return rooms
+
+@app.get("/api/rooms/{room_id}/booked-dates")
+def get_booked_dates(room_id: str):
+    """API lấy danh sách các ngày đã có khách đặt của 1 phòng cụ thể"""
+    conn, cursor = get_db_cursor()
+    try:
+        query = """
+            SELECT d.NgayDat, d.NgayTra 
+            FROM DonDatPhong d
+            JOIN ChiTietDatPhong c ON d.MaDDP = c.MaDDP
+            WHERE c.MaPhong = ? AND d.TinhTrangDon IN (N'Đang ở', N'Đã xác nhận')
+        """
+        cursor.execute(query, (room_id,))
+        rows = cursor.fetchall()
+        
+        booked_dates = []
+        for row in rows:
+            # Xử lý format ngày chuẩn YYYY-MM-DD cho thư viện Flatpickr ở Frontend
+            start_date = row[0].strftime("%Y-%m-%d") if hasattr(row[0], 'strftime') else str(row[0])[:10]
+            end_date = row[1].strftime("%Y-%m-%d") if hasattr(row[1], 'strftime') else str(row[1])[:10]
+            
+            booked_dates.append({
+                "from": start_date,
+                "to": end_date
+            })
+            
+        return booked_dates
+    except Exception as e:
+        print(f"Lỗi truy vấn lịch bận: {e}")
+        return []
+    finally:
+        conn.close()
+        
 @app.post("/api/login")
 def login(data: LoginModel):
     conn, cursor = get_db_cursor()
